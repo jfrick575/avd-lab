@@ -59,30 +59,72 @@ if ($provider -ne "Registered") {
 Write-Host "Provider is registered: $provider" -ForegroundColor Green
 
 # Check if template already exists
-$existingTemplate = az image builder show --name $TemplateName --resource-group $ResourceGroupName 2>$null
-
-if ($existingTemplate) {
-    Write-Host "Image Builder template '$TemplateName' already exists." -ForegroundColor Yellow
-    $response = Read-Host "Do you want to delete and recreate it? (y/N)"
-    
-    if ($response -eq "y" -or $response -eq "Y") {
-        Write-Host "Deleting existing template..." -ForegroundColor Yellow
-        az image builder delete --name $TemplateName --resource-group $ResourceGroupName --yes
-        Start-Sleep -Seconds 10
+Write-Host "Checking if template already exists..." -ForegroundColor Yellow
+try {
+    $existingTemplate = az image builder show --name $TemplateName --resource-group $ResourceGroupName --output json 2>$null
+    if ($LASTEXITCODE -eq 0 -and $existingTemplate) {
+        Write-Host "Image Builder template '$TemplateName' already exists." -ForegroundColor Yellow
+        $response = Read-Host "Do you want to delete and recreate it? (y/N)"
+        
+        if ($response -eq "y" -or $response -eq "Y") {
+            Write-Host "Deleting existing template..." -ForegroundColor Yellow
+            az image builder delete --name $TemplateName --resource-group $ResourceGroupName --yes
+            Start-Sleep -Seconds 10
+        } else {
+            Write-Host "Keeping existing template. Exiting." -ForegroundColor Yellow
+            exit 0
+        }
     } else {
-        Write-Host "Keeping existing template. Exiting." -ForegroundColor Yellow
-        exit 0
+        Write-Host "Template does not exist. Proceeding with creation." -ForegroundColor Green
     }
+} catch {
+    Write-Host "Template does not exist. Proceeding with creation." -ForegroundColor Green
 }
 
-# Create the Image Builder template
+# Read and parse the JSON configuration
+Write-Host "Reading template configuration..." -ForegroundColor Yellow
+$templateConfig = Get-Content $JsonFilePath | ConvertFrom-Json
+
+# Create the Image Builder template using Azure CLI
 Write-Host "Creating Image Builder template..." -ForegroundColor Yellow
 
 try {
+    # Create a temporary ARM template file
+    $armTemplate = @{
+        '$schema' = "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
+        contentVersion = "1.0.0.0"
+        parameters = @{
+            imageTemplateName = @{
+                type = "string"
+                defaultValue = $TemplateName
+            }
+        }
+        resources = @(
+            @{
+                type = $templateConfig.type
+                apiVersion = $templateConfig.apiVersion
+                name = "[parameters('imageTemplateName')]"
+                location = $templateConfig.location
+                dependsOn = $templateConfig.dependsOn
+                tags = $templateConfig.tags
+                identity = $templateConfig.identity
+                properties = $templateConfig.properties
+            }
+        )
+    }
+    
+    # Save the ARM template to a temporary file
+    $tempArmFile = [System.IO.Path]::GetTempFileName() + ".json"
+    $armTemplate | ConvertTo-Json -Depth 20 | Set-Content $tempArmFile
+    
+    # Deploy the ARM template
     az deployment group create `
         --resource-group $ResourceGroupName `
-        --template-file $JsonFilePath `
+        --template-file $tempArmFile `
         --parameters imageTemplateName=$TemplateName
+    
+    # Clean up temp file
+    Remove-Item $tempArmFile -Force -ErrorAction SilentlyContinue
     
     Write-Host "Image Builder template created successfully!" -ForegroundColor Green
     
@@ -92,6 +134,10 @@ try {
     
 } catch {
     Write-Error "Failed to create Image Builder template: $_"
+    # Clean up temp file if it exists
+    if (Test-Path $tempArmFile) {
+        Remove-Item $tempArmFile -Force -ErrorAction SilentlyContinue
+    }
     exit 1
 }
 

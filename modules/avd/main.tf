@@ -102,6 +102,7 @@ resource "azurerm_network_interface" "session_host" {
 resource "azurerm_windows_virtual_machine" "session_host" {
   count               = var.session_host_count
   name                = "vm-${var.project_name}-${var.environment}-we-${format("%03d", count.index + 1)}"
+  computer_name       = "avd-${format("%02d", count.index + 1)}"
   location            = var.location
   resource_group_name = var.resource_group_name
   size                = var.session_host_vm_size

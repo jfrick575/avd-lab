@@ -12,7 +12,7 @@ resource "random_password" "local_admin_password" {
 
 # Resource Group
 resource "azurerm_resource_group" "main" {
-  name     = "rg-${var.project_name}-${var.environment}-we-001"
+  name     = "lab-avd-rg"
   location = var.location
   tags     = var.tags
 }

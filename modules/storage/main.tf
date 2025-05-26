@@ -1,6 +1,18 @@
+# Random string for storage account naming
+resource "random_string" "storage_suffix" {
+  length  = 8
+  special = false
+  upper   = false
+  
+  # Force new suffix for lab environment
+  keepers = {
+    environment = "lab"
+  }
+}
+
 # Storage Account for FSLogix
 resource "azurerm_storage_account" "fslogix" {
-  name                     = "st${var.project_name}${var.environment}we001"
+  name                     = "stlab${random_string.storage_suffix.result}"
   resource_group_name      = var.resource_group_name
   location                 = var.location
   account_tier             = var.fslogix_storage_tier
@@ -10,12 +22,8 @@ resource "azurerm_storage_account" "fslogix" {
   # Enable large file shares for FSLogix
   large_file_share_enabled = true
 
-  # Network rules
-  network_rules {
-    default_action             = "Deny"
-    bypass                     = ["AzureServices"]
-    virtual_network_subnet_ids = [var.subnet_id]
-  }
+  # Allow public access during creation and management
+  public_network_access_enabled = true
 
   # Enable Azure Files authentication
   azure_files_authentication {

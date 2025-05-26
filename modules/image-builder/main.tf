@@ -52,7 +52,7 @@ resource "azurerm_shared_image" "win11_multi_session" {
 
 # Storage Account for Image Builder scripts and logs
 resource "azurerm_storage_account" "image_builder" {
-  name                     = "st${var.project_name}imgwe001"
+  name                     = "st${var.project_name}img${random_string.storage_suffix.result}"
   resource_group_name      = var.resource_group_name
   location                 = var.location
   account_tier             = "Standard"
@@ -60,6 +60,13 @@ resource "azurerm_storage_account" "image_builder" {
   account_kind             = "StorageV2"
 
   tags = var.tags
+}
+
+# Random string for storage account naming
+resource "random_string" "storage_suffix" {
+  length  = 6
+  special = false
+  upper   = false
 }
 
 # Container for Image Builder artifacts
@@ -90,22 +97,48 @@ resource "azurerm_storage_blob" "install_notepadpp" {
     $output = "$tempDir\npp-installer.exe"
     
     try {
-        Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing
-        Write-Host "Downloaded Notepad++ installer"
+        # Set TLS version for secure download
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        
+        Write-Host "Downloading Notepad++ from: $url"
+        Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 300
+        Write-Host "Downloaded Notepad++ installer successfully"
+        
+        # Verify file was downloaded
+        if (-not (Test-Path $output)) {
+            throw "Installer file not found after download"
+        }
         
         # Install silently
-        Start-Process -FilePath $output -ArgumentList '/S' -Wait -NoNewWindow
-        Write-Host "Notepad++ installed successfully"
+        Write-Host "Installing Notepad++ silently..."
+        $process = Start-Process -FilePath $output -ArgumentList '/S' -Wait -NoNewWindow -PassThru
+        
+        if ($process.ExitCode -eq 0) {
+            Write-Host "Notepad++ installed successfully"
+        } else {
+            throw "Installation failed with exit code: $($process.ExitCode)"
+        }
+        
+                 # Verify installation
+         $nppPath = "$${env:ProgramFiles}\Notepad++\notepad++.exe"
+        if (Test-Path $nppPath) {
+            Write-Host "Notepad++ installation verified at: $nppPath"
+        } else {
+            Write-Warning "Notepad++ executable not found at expected location"
+        }
         
         # Clean up
         Remove-Item $output -Force -ErrorAction SilentlyContinue
+        Write-Host "Cleanup completed"
         
     } catch {
         Write-Error "Failed to install Notepad++: $_"
+        # Clean up on error
+        Remove-Item $output -Force -ErrorAction SilentlyContinue
         exit 1
     }
     
-    Write-Host "Notepad++ installation completed"
+    Write-Host "Notepad++ installation completed successfully"
   EOT
 }
 
@@ -129,7 +162,7 @@ resource "local_file" "create_image_template" {
       }
     },
     "properties" : {
-      "buildTimeoutInMinutes" : 120,
+      "buildTimeoutInMinutes" : 240,
       "vmProfile" : {
         "vmSize" : "Standard_D4s_v3",
         "osDiskSizeGB" : 128
@@ -154,12 +187,44 @@ resource "local_file" "create_image_template" {
         },
         {
           "type" : "PowerShell",
-          "name" : "OptimizeOS",
+          "name" : "PrepareForSysprep",
           "inline" : [
-            "# Disable Windows Update during image creation",
+            "# Wait for any pending operations to complete",
+            "Start-Sleep -Seconds 30",
+            "# Stop and disable Windows Update service temporarily",
+            "Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue",
             "Set-Service -Name wuauserv -StartupType Disabled",
-            "# Clean up temp files",
-            "Get-ChildItem -Path C:\\temp -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue"
+            "# Clear Windows Update cache",
+            "Remove-Item -Path 'C:\\Windows\\SoftwareDistribution\\Download\\*' -Recurse -Force -ErrorAction SilentlyContinue",
+            "# Clean up temp files and logs",
+            "Get-ChildItem -Path C:\\temp -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue",
+            "Get-ChildItem -Path C:\\Windows\\Temp -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue",
+            "# Clear event logs to reduce image size",
+            "wevtutil el | ForEach-Object { wevtutil cl $_ }",
+            "# Defragment the disk",
+            "Optimize-Volume -DriveLetter C -Defrag -Verbose",
+            "# Run disk cleanup",
+            "Start-Process -FilePath 'cleanmgr.exe' -ArgumentList '/sagerun:1' -Wait -NoNewWindow -ErrorAction SilentlyContinue"
+          ]
+        },
+        {
+          "type" : "WindowsRestart",
+          "restartCheckCommand" : "echo 'Final restart before sysprep'",
+          "restartTimeout" : "15m"
+        },
+        {
+          "type" : "PowerShell",
+          "name" : "FinalSysprepPrep",
+          "inline" : [
+            "# Final preparations for sysprep",
+            "Write-Host 'Starting final sysprep preparations...'",
+            "# Ensure Windows Update service is stopped",
+            "Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue",
+            "# Wait for system to stabilize",
+            "Start-Sleep -Seconds 60",
+            "# Re-enable Windows Update service for the final image",
+            "Set-Service -Name wuauserv -StartupType Manual",
+            "Write-Host 'Sysprep preparations complete'"
           ]
         }
       ],

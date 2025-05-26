@@ -126,7 +126,7 @@ resource "azurerm_log_analytics_solution" "avd_insights" {
 
   plan {
     publisher = "Microsoft"
-    product   = "OMSGallery/WindowsVirtualDesktop"
+    product   = "WindowsVirtualDesktop"
   }
 
   tags = var.tags

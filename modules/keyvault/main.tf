@@ -1,9 +1,16 @@
 # Data source for current client configuration
 data "azurerm_client_config" "current" {}
 
+# Random string for Key Vault naming
+resource "random_string" "keyvault_suffix" {
+  length  = 6
+  special = false
+  upper   = false
+}
+
 # Key Vault
 resource "azurerm_key_vault" "main" {
-  name                       = "kv-${var.project_name}-${var.environment}-we-001"
+  name                       = "kv-${var.project_name}-${var.environment}-${random_string.keyvault_suffix.result}"
   location                   = var.location
   resource_group_name        = var.resource_group_name
   tenant_id                  = var.tenant_id
