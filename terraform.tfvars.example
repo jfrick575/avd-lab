@@ -1,0 +1,42 @@
+# Azure Configuration
+subscription_id = "02b4788a-7fc7-4485-834f-a7547c61156b"
+tenant_id       = "c831cf37-07c4-4845-91f6-9ee7b1c0a6c1"
+location        = "West Europe"
+environment     = "prod"
+project_name    = "avd"
+
+# Networking Configuration
+vnet_address_space = ["10.0.0.0/16"]
+subnet_address_prefixes = {
+  avd_subnet     = "10.0.1.0/24"
+  storage_subnet = "10.0.2.0/24"
+}
+
+# AVD Configuration
+host_pool_name               = "hp-avd-prod-we-001"
+host_pool_type               = "Pooled"
+host_pool_load_balancer_type = "BreadthFirst"
+host_pool_max_sessions       = 10
+session_host_count           = 2
+session_host_vm_size         = "Standard_D4s_v5"
+local_admin_username         = "localadmin"
+
+# Storage Configuration
+fslogix_storage_size = 10
+fslogix_storage_tier = "Standard"
+
+# Monitoring Configuration
+log_analytics_retention_days = 30
+
+# Image Builder Configuration
+image_template_name   = "win11-avd-template"
+image_gallery_name    = "sig_avd_prod_we_001"
+image_definition_name = "win11-multi-session"
+
+# Tags
+tags = {
+  Environment = "Production"
+  Project     = "AVD"
+  ManagedBy   = "Terraform"
+  Owner       = "IT-Team"
+} 

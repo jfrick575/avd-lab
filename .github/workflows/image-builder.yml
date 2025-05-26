@@ -1,0 +1,117 @@
+name: 'Build AVD Image'
+
+on:
+  schedule:
+    # Run monthly on the 1st at 2 AM UTC
+    - cron: '0 2 1 * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force image build'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+
+jobs:
+  build-image:
+    name: 'Build Custom AVD Image'
+    runs-on: ubuntu-latest
+    environment: production
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Get Image Template Resource Group
+      id: get-rg
+      run: |
+        RG_NAME=$(az group list --query "[?contains(name, 'avd-prod')].name" -o tsv | head -1)
+        echo "resource_group=$RG_NAME" >> $GITHUB_OUTPUT
+
+    - name: Start Image Build
+      id: build
+      run: |
+        TEMPLATE_NAME="win11-avd-template"
+        RG_NAME="${{ steps.get-rg.outputs.resource_group }}"
+        
+        echo "Starting image build for template: $TEMPLATE_NAME in RG: $RG_NAME"
+        
+        # Start the image build
+        BUILD_ID=$(az image builder run \
+          --name $TEMPLATE_NAME \
+          --resource-group $RG_NAME \
+          --query "name" -o tsv)
+        
+        echo "build_id=$BUILD_ID" >> $GITHUB_OUTPUT
+        echo "Image build started with ID: $BUILD_ID"
+
+    - name: Wait for Build Completion
+      run: |
+        TEMPLATE_NAME="win11-avd-template"
+        RG_NAME="${{ steps.get-rg.outputs.resource_group }}"
+        
+        echo "Waiting for image build to complete..."
+        
+        # Wait for build to complete (timeout after 2 hours)
+        timeout 7200 bash -c '
+          while true; do
+            STATUS=$(az image builder show-runs \
+              --name '$TEMPLATE_NAME' \
+              --resource-group '$RG_NAME' \
+              --query "lastRunStatus.runState" -o tsv 2>/dev/null || echo "Unknown")
+            
+            echo "Current build status: $STATUS"
+            
+            if [ "$STATUS" = "Succeeded" ]; then
+              echo "Image build completed successfully!"
+              exit 0
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Canceled" ]; then
+              echo "Image build failed with status: $STATUS"
+              exit 1
+            fi
+            
+            sleep 60
+          done
+        '
+
+    - name: Get Build Logs on Failure
+      if: failure()
+      run: |
+        TEMPLATE_NAME="win11-avd-template"
+        RG_NAME="${{ steps.get-rg.outputs.resource_group }}"
+        
+        echo "Getting build logs for failed build..."
+        az image builder show-runs \
+          --name $TEMPLATE_NAME \
+          --resource-group $RG_NAME \
+          --query "lastRunStatus" -o json
+
+    - name: Update Image Version
+      if: success()
+      run: |
+        echo "Image build completed successfully!"
+        echo "New image version is available in the Shared Image Gallery"
+        
+        # Get the latest image version
+        RG_NAME="${{ steps.get-rg.outputs.resource_group }}"
+        GALLERY_NAME="sig_avd_prod_we_001"
+        IMAGE_NAME="win11-multi-session"
+        
+        LATEST_VERSION=$(az sig image-version list \
+          --resource-group $RG_NAME \
+          --gallery-name $GALLERY_NAME \
+          --gallery-image-definition $IMAGE_NAME \
+          --query "max_by([], &name).name" -o tsv)
+        
+        echo "Latest image version: $LATEST_VERSION" 
